@@ -309,8 +309,8 @@ app.post("/api/chat/:personaId", auth, async (req, res) => {
 // streaming chat
 app.post("/api/chat/stream/:personaId", auth, async (req, res) => {
     try {
-        const { messages, model, temperature, maxOutputTokens, safetySettings } =
-            BodySchema.parse(req.body);
+        const { messages, model, temperature, maxOutputTokens, safetySettings, regenerate } =
+            BodySchema.extend({ regenerate: z.boolean().optional() }).parse(req.body);
 
         const persona = await Persona.findOne({ _id: req.params.personaId, userId: req.userId });
         if (!persona) return res.status(404).json({ error: "Persona not found" });
@@ -320,11 +320,23 @@ app.post("/api/chat/stream/:personaId", auth, async (req, res) => {
         res.setHeader("Connection", "keep-alive");
         res.flushHeaders?.();
 
-        const userMsg = await Message.create({
-            personaId: persona._id,
-            role: "user",
-            content: messages[messages.length - 1]?.content || "",
-        });
+        let userMsg = null;
+
+        // 🔹 Nếu regenerate thì xóa assistant cuối trong DB
+        if (regenerate) {
+            const lastAssistant = await Message.findOne({ personaId: persona._id, role: "assistant" })
+                .sort({ createdAt: -1 });
+            if (lastAssistant) {
+                await lastAssistant.deleteOne();
+            }
+        } else {
+            // 🔹 Nếu là chat bình thường -> lưu user message mới
+            userMsg = await Message.create({
+                personaId: persona._id,
+                role: "user",
+                content: messages[messages.length - 1]?.content || "",
+            });
+        }
 
         const modelAI = genAI.getGenerativeModel({ model });
 
@@ -361,6 +373,7 @@ app.post("/api/chat/stream/:personaId", auth, async (req, res) => {
         res.end();
     }
 });
+
 
 // history
 app.get("/api/chat/:personaId/history", auth, async (req, res) => {
