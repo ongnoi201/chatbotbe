@@ -392,14 +392,24 @@ app.post("/api/chat/stream/:personaId", auth, async (req, res) => {
 
 app.get("/api/chat/:personaId/history", auth, async (req, res) => {
     try {
-        const messages = await Message.find({ personaId: req.params.personaId })
-            .sort({ createdAt: 1 })
-            .limit(100);
-        res.json(messages);
+        const limit = parseInt(req.query.limit) || 200;
+        const before = req.query.before;
+
+        let query = { personaId: req.params.personaId };
+
+        if (before) {
+            query.createdAt = { $lt: new Date(before) };
+        }
+
+        const messages = await Message.find(query)
+            .sort({ createdAt: -1 })
+            .limit(limit);
+        res.json(messages.reverse());
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
 });
+
 
 app.post("/api/chat/:personaId/delete", auth, async (req, res) => {
     try {
