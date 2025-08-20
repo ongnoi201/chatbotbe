@@ -7,21 +7,40 @@ import { z } from "zod";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import multer from "multer";
-import path from "path";
-import fs from "fs";
+import { v2 as cloudinary } from "cloudinary";
 
 dotenv.config();
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 app.use(
     cors({
-        origin: (process.env.FRONTEND_ORIGIN || "").split(","
-        ).filter(Boolean) || true,
+        origin: (process.env.FRONTEND_ORIGIN || "").split(",").filter(Boolean) || true,
     })
 );
 
 // Google AI client
 const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+
+// Cloudinary config
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+const DEFAULT_AVATAR =
+    "https://gcs.tripi.vn/public-tripi/tripi-feed/img/477733sdR/anh-mo-ta.png";
+
+// Multer (memory storage)
+const storage = multer.memoryStorage();
+const upload = multer({
+    storage,
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+    fileFilter: (req, file, cb) => {
+        const ok = ["image/jpg", "image/jpeg", "image/png", "image/webp", "image/gif"].includes(file.mimetype);
+        cb(ok ? null : new Error("Unsupported file type"), ok);
+    },
+});
 
 // Mongo models
 const UserSchema = new mongoose.Schema(
@@ -42,7 +61,7 @@ const PersonaSchema = new mongoose.Schema(
         style: String,
         language: String,
         rules: [String],
-        avatarUrl: { type: String, default: "https://gcs.tripi.vn/public-tripi/tripi-feed/img/477733sdR/anh-mo-ta.png" },
+        avatarUrl: { type: String, default: DEFAULT_AVATAR },
     },
     { timestamps: true }
 );
@@ -112,20 +131,35 @@ function auth(req, res, next) {
     }
 }
 
-const uploadDir = path.join(process.cwd(), "uploads");
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+// Cloudinary helpers
+function getCloudinaryPublicId(url) {
+    try {
+        const u = new URL(url);
+        const parts = u.pathname.split("/");
+        const file = parts.pop(); // abc123.jpg
+        const folder = parts.pop(); // personas
+        if (!file || !folder) return null;
+        return `${folder}/${file.split(".")[0]}`;
+    } catch {
+        return null;
+    }
+}
 
-// config multer
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, uploadDir),
-    filename: (req, file, cb) => {
-        const ext = path.extname(file.originalname);
-        cb(null, Date.now() + ext);
-    },
-});
+function uploadToCloudinary(buffer, filename) {
+    const folder = process.env.CLOUDINARY_FOLDER || "personas";
+    return new Promise((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+            { folder, public_id: filename, resource_type: "image" },
+            (err, result) => (err ? reject(err) : resolve(result))
+        );
+        stream.end(buffer);
+    });
+}
 
-const upload = multer({ storage });
-app.use("/uploads", express.static(uploadDir));
+function deleteFromCloudinary(publicId) {
+    if (!publicId) return Promise.resolve();
+    return cloudinary.uploader.destroy(publicId, { resource_type: "image" });
+}
 
 // Auth routes
 app.post("/api/users/register", async (req, res) => {
@@ -163,14 +197,13 @@ app.post("/api/users/login", async (req, res) => {
 // Persona routes
 app.post("/api/personas", auth, upload.single("avatar"), async (req, res) => {
     try {
-        let avatarUrl = "https://gcs.tripi.vn/public-tripi/tripi-feed/img/477733sdR/anh-mo-ta.png";
-
+        let avatarUrl = DEFAULT_AVATAR;
         if (req.file) {
-            avatarUrl = `${process.env.BACKEND_ORIGIN}/uploads/${req.file.filename}`;
+            const result = await uploadToCloudinary(req.file.buffer, String(Date.now()));
+            avatarUrl = result.secure_url;
         }
 
         const { name, description, tone, style, language, rules } = req.body;
-
         const persona = await Persona.create({
             userId: req.userId,
             name,
@@ -184,10 +217,10 @@ app.post("/api/personas", auth, upload.single("avatar"), async (req, res) => {
 
         res.json(persona);
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error("❌ Create persona error:", err);
+        res.status(500).json({ error: "Server error" });
     }
 });
-
 
 app.get("/api/personas", auth, async (req, res) => {
     try {
@@ -198,7 +231,6 @@ app.get("/api/personas", auth, async (req, res) => {
     }
 });
 
-// Update persona
 app.put("/api/personas/:id", auth, upload.single("avatar"), async (req, res) => {
     try {
         const { id } = req.params;
@@ -207,21 +239,21 @@ app.put("/api/personas/:id", auth, upload.single("avatar"), async (req, res) => 
 
         let avatarUrl = persona.avatarUrl;
         if (req.file) {
-            avatarUrl = `${process.env.BACKEND_ORIGIN}/uploads/${req.file.filename}`;
+            if (persona.avatarUrl && persona.avatarUrl !== DEFAULT_AVATAR) {
+                const publicId = getCloudinaryPublicId(persona.avatarUrl);
+                if (publicId) await deleteFromCloudinary(publicId);
+            }
+            const result = await uploadToCloudinary(req.file.buffer, String(Date.now()));
+            avatarUrl = result.secure_url;
         }
 
         const { name, description, tone, style, language, rules } = req.body;
-
         persona.name = name ?? persona.name;
         persona.description = description ?? persona.description;
         persona.tone = tone ?? persona.tone;
         persona.style = style ?? persona.style;
         persona.language = language ?? persona.language;
-        persona.rules = rules
-            ? Array.isArray(rules)
-                ? rules
-                : [rules]
-            : persona.rules;
+        persona.rules = rules ? (Array.isArray(rules) ? rules : [rules]) : persona.rules;
         persona.avatarUrl = avatarUrl;
 
         await persona.save();
@@ -232,20 +264,17 @@ app.put("/api/personas/:id", auth, upload.single("avatar"), async (req, res) => 
     }
 });
 
-// Delete persona + related messages
 app.delete("/api/personas/:id", auth, async (req, res) => {
     try {
         const { id } = req.params;
         const persona = await Persona.findOne({ _id: id, userId: req.userId });
         if (!persona) return res.status(404).json({ error: "Persona not found" });
-        const defaultAvatar = "https://gcs.tripi.vn/public-tripi/tripi-feed/img/477733sdR/anh-mo-ta.png";
-        if (persona.avatarUrl && persona.avatarUrl !== defaultAvatar) {
-            const filename = path.basename(persona.avatarUrl);
-            const filePath = path.join(uploadDir, filename);
-            if (fs.existsSync(filePath)) {
-                fs.unlinkSync(filePath);
-            }
+
+        if (persona.avatarUrl && persona.avatarUrl !== DEFAULT_AVATAR) {
+            const publicId = getCloudinaryPublicId(persona.avatarUrl);
+            if (publicId) await deleteFromCloudinary(publicId);
         }
+
         await Message.deleteMany({ personaId: id });
         await Persona.deleteOne({ _id: id });
         res.json({ success: true, message: "Persona, related messages and avatar deleted" });
@@ -255,20 +284,15 @@ app.delete("/api/personas/:id", auth, async (req, res) => {
     }
 });
 
-
-
 // Chat routes
 const BodySchema = z.object({
-    messages: z
-        .array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() }))
-        .default([]),
+    messages: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() })).default([]),
     model: z.string().default("gemini-2.0-flash-exp"),
     temperature: z.number().min(0).max(2).default(0.7),
     maxOutputTokens: z.number().min(1).max(8192).default(1024),
     safetySettings: z.array(z.any()).optional(),
 });
 
-// normal chat
 app.post("/api/chat/:personaId", auth, async (req, res) => {
     try {
         const { messages, model, temperature, maxOutputTokens, safetySettings } =
@@ -284,7 +308,6 @@ app.post("/api/chat/:personaId", auth, async (req, res) => {
         });
 
         const modelAI = genAI.getGenerativeModel({ model });
-
         const result = await modelAI.generateContent({
             contents: toHistory(messages),
             systemInstruction: personaToSystem(persona),
@@ -306,7 +329,6 @@ app.post("/api/chat/:personaId", auth, async (req, res) => {
     }
 });
 
-// streaming chat
 app.post("/api/chat/stream/:personaId", auth, async (req, res) => {
     try {
         const { messages, model, temperature, maxOutputTokens, safetySettings, regenerate } =
@@ -321,16 +343,14 @@ app.post("/api/chat/stream/:personaId", auth, async (req, res) => {
         res.flushHeaders?.();
 
         let userMsg = null;
-
-        // 🔹 Nếu regenerate thì xóa assistant cuối trong DB
         if (regenerate) {
-            const lastAssistant = await Message.findOne({ personaId: persona._id, role: "assistant" })
-                .sort({ createdAt: -1 });
+            const lastAssistant = await Message.findOne({ personaId: persona._id, role: "assistant" }).sort({
+                createdAt: -1,
+            });
             if (lastAssistant) {
                 await lastAssistant.deleteOne();
             }
         } else {
-            // 🔹 Nếu là chat bình thường -> lưu user message mới
             userMsg = await Message.create({
                 personaId: persona._id,
                 role: "user",
@@ -339,7 +359,6 @@ app.post("/api/chat/stream/:personaId", auth, async (req, res) => {
         }
 
         const modelAI = genAI.getGenerativeModel({ model });
-
         const stream = await modelAI.generateContentStream({
             contents: toHistory(messages),
             systemInstruction: personaToSystem(persona),
@@ -348,7 +367,6 @@ app.post("/api/chat/stream/:personaId", auth, async (req, res) => {
         });
 
         let reply = "";
-
         for await (const chunk of stream.stream) {
             const text = chunk.text();
             if (text) {
@@ -363,9 +381,7 @@ app.post("/api/chat/stream/:personaId", auth, async (req, res) => {
             content: reply,
         });
 
-        res.write(
-            `data: ${JSON.stringify({ done: true, reply, userMsg, assistantMsg })}\n\n`
-        );
+        res.write(`data: ${JSON.stringify({ done: true, reply, userMsg, assistantMsg })}\n\n`);
         res.end();
     } catch (err) {
         console.error("STREAM_ERROR", err);
@@ -374,8 +390,6 @@ app.post("/api/chat/stream/:personaId", auth, async (req, res) => {
     }
 });
 
-
-// history
 app.get("/api/chat/:personaId/history", auth, async (req, res) => {
     try {
         const messages = await Message.find({ personaId: req.params.personaId })
@@ -387,13 +401,13 @@ app.get("/api/chat/:personaId/history", auth, async (req, res) => {
     }
 });
 
-// Xóa đoạn chat từ index trở đi
 app.post("/api/chat/:personaId/delete", auth, async (req, res) => {
     try {
         const { personaId } = req.params;
         const { index } = req.body;
         const persona = await Persona.findOne({ _id: personaId, userId: req.userId });
         if (!persona) return res.status(404).json({ error: "Persona not found" });
+
         const messages = await Message.find({ personaId }).sort({ createdAt: 1 });
         if (index < 0 || index >= messages.length) {
             return res.status(400).json({ error: "Invalid index" });
