@@ -161,6 +161,23 @@ function deleteFromCloudinary(publicId) {
     return cloudinary.uploader.destroy(publicId, { resource_type: "image" });
 }
 
+// Giữ lại tối đa 1000 tin nhắn gần nhất cho persona
+async function enforceMessageLimit(personaId, limit = 1000) {
+    const count = await Message.countDocuments({ personaId });
+    if (count > limit) {
+        const excess = count - limit;
+        const oldMessages = await Message.find({ personaId })
+            .sort({ createdAt: 1 })
+            .limit(excess)
+            .select("_id");
+        const ids = oldMessages.map(m => m._id);
+        if (ids.length) {
+            await Message.deleteMany({ _id: { $in: ids } });
+        }
+    }
+}
+
+
 // Auth routes
 app.post("/api/users/register", async (req, res) => {
     try {
@@ -323,6 +340,7 @@ app.post("/api/chat/:personaId", auth, async (req, res) => {
             content: reply,
         });
 
+        await enforceMessageLimit(persona._id, 1000);
         res.json({ reply, userMsg, assistantMsg });
     } catch (err) {
         res.status(500).json({ error: err?.message || "GENERATION_ERROR" });
@@ -381,6 +399,7 @@ app.post("/api/chat/stream/:personaId", auth, async (req, res) => {
             content: reply,
         });
 
+        await enforceMessageLimit(persona._id, 1000);
         res.write(`data: ${JSON.stringify({ done: true, reply, userMsg, assistantMsg })}\n\n`);
         res.end();
     } catch (err) {
@@ -407,6 +426,21 @@ app.get("/api/chat/:personaId/history", auth, async (req, res) => {
         res.json(messages.reverse());
     } catch (err) {
         res.status(500).json({ error: err.message });
+    }
+});
+
+
+app.delete("/api/chat/:personaId/history", auth, async (req, res) => {
+    try {
+        const { personaId } = req.params;
+        const persona = await Persona.findOne({ _id: personaId, userId: req.userId });
+        if (!persona) return res.status(404).json({ error: "Persona not found" });
+
+        await Message.deleteMany({ personaId });
+        res.json({ success: true, message: "All chat history deleted" });
+    } catch (err) {
+        console.error("❌ Lỗi xóa toàn bộ lịch sử chat:", err);
+        res.status(500).json({ error: "Server error" });
     }
 });
 
