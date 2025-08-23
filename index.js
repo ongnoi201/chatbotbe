@@ -8,6 +8,8 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import multer from "multer";
 import { v2 as cloudinary } from "cloudinary";
+import cron from "node-cron";
+import webpush from "web-push";
 
 dotenv.config();
 const app = express();
@@ -27,6 +29,14 @@ cloudinary.config({
     api_key: process.env.CLOUDINARY_API_KEY,
     api_secret: process.env.CLOUDINARY_API_SECRET,
 });
+
+// Generate VAPID keys (chỉ cần 1 lần, rồi lưu vào .env)
+webpush.setVapidDetails(
+    "mailto:laogia.jp60@gmail.com",
+    process.env.VAPID_PUBLIC_KEY,
+    process.env.VAPID_PRIVATE_KEY
+);
+
 
 const DEFAULT_AVATAR =
     "https://gcs.tripi.vn/public-tripi/tripi-feed/img/477733sdR/anh-mo-ta.png";
@@ -78,9 +88,15 @@ const MessageSchema = new mongoose.Schema(
     { timestamps: true }
 );
 
+const SubscriptionSchema = new mongoose.Schema({
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    subscription: { type: Object, required: true },
+});
+
 const User = mongoose.model("User", UserSchema);
 const Persona = mongoose.model("Persona", PersonaSchema);
 const Message = mongoose.model("Message", MessageSchema);
+const Subscription = mongoose.model("Subscription", SubscriptionSchema);
 
 // Helpers
 function personaToSystem({
@@ -177,6 +193,60 @@ async function enforceMessageLimit(personaId, limit = 1000) {
     }
 }
 
+// Hàm sinh tin nhắn random từ persona
+async function generateRandomMessage(persona) {
+    try {
+        const prompt = `Bạn là ${persona.name}, ${persona.description}, hãy gửi một tin nhắn ngắn gọn, tự nhiên.`;
+        const modelAI = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+
+        const result = await modelAI.generateContent(prompt);
+        const text = result.response.text().trim();
+
+        return text.length > 0 ? text : "Xin chào 👋";
+    } catch (err) {
+        console.error("Lỗi AI:", err);
+    }
+}
+
+async function runAutoMessage() {
+    console.log("🕒 Tới giờ gửi tin nhắn tự động...");
+    try {
+        const personas = await Persona.find({});
+        for (const persona of personas) {
+            const reply = await generateRandomMessage(persona);
+            const assistantMsg = await Message.create({
+                personaId: persona._id,
+                role: "assistant",
+                content: reply,
+                metadata: { auto: true, scheduled: true },
+            });
+            // Gửi push notification
+            sendPushNotification(persona.userId, reply);
+        }
+    } catch (err) {
+        console.error("❌ Lỗi khi gửi tin nhắn tự động:", err);
+    }
+}
+
+cron.schedule("0 0 8 * * *", runAutoMessage);    // 8:00:00 AM
+cron.schedule("0 0 13 * * *", runAutoMessage);   // 1:00:00 PM
+cron.schedule("0 0 20 * * *", runAutoMessage);   // 8:00:00 PM
+
+
+async function sendPushNotification(userId, message) {
+    const subs = await Subscription.find({ userId });
+    for (const s of subs) {
+        try {
+            await webpush.sendNotification(
+                s.subscription,
+                JSON.stringify({ title: "Tin nhắn mới từ chatbot", body: message })
+            );
+        } catch (err) {
+            console.error("❌ Push error:", err);
+        }
+    }
+}
+
 
 // Auth routes
 app.post("/api/users/register", async (req, res) => {
@@ -206,6 +276,31 @@ app.post("/api/users/login", async (req, res) => {
             expiresIn: "7d",
         });
         res.json({ token, user });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+
+app.post("/api/subscribe", auth, async (req, res) => {
+    try {
+        const { subscription } = req.body;
+        const existingSub = await Subscription.findOne({
+            userId: req.userId,
+            "subscription.endpoint": subscription.endpoint,
+        });
+
+        if (!existingSub) {
+            await Subscription.create({
+                userId: req.userId,
+                subscription: subscription,
+            });
+            console.log("✅ New subscription saved.");
+        } else {
+            console.log("ℹ️ Subscription already exists.");
+        }
+
+        res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
@@ -253,13 +348,14 @@ app.put("/api/personas/:id", auth, upload.single("avatar"), async (req, res) => 
         const { id } = req.params;
         const persona = await Persona.findOne({ _id: id, userId: req.userId });
         if (!persona) return res.status(404).json({ error: "Persona not found" });
-
         let avatarUrl = persona.avatarUrl;
-        if (req.file) {
+
+        if (req.file && req.file.buffer?.length) {
             if (persona.avatarUrl && persona.avatarUrl !== DEFAULT_AVATAR) {
                 const publicId = getCloudinaryPublicId(persona.avatarUrl);
                 if (publicId) await deleteFromCloudinary(publicId);
             }
+
             const result = await uploadToCloudinary(req.file.buffer, String(Date.now()));
             avatarUrl = result.secure_url;
         }
@@ -270,7 +366,9 @@ app.put("/api/personas/:id", auth, upload.single("avatar"), async (req, res) => 
         persona.tone = tone ?? persona.tone;
         persona.style = style ?? persona.style;
         persona.language = language ?? persona.language;
-        persona.rules = rules ? (Array.isArray(rules) ? rules : [rules]) : persona.rules;
+        persona.rules = rules
+            ? (Array.isArray(rules) ? rules : [rules])
+            : persona.rules;
         persona.avatarUrl = avatarUrl;
 
         await persona.save();
@@ -280,6 +378,7 @@ app.put("/api/personas/:id", auth, upload.single("avatar"), async (req, res) => 
         res.status(500).json({ error: "Server error" });
     }
 });
+
 
 app.delete("/api/personas/:id", auth, async (req, res) => {
     try {
@@ -426,6 +525,34 @@ app.get("/api/chat/:personaId/history", auth, async (req, res) => {
         res.json(messages.reverse());
     } catch (err) {
         res.status(500).json({ error: err.message });
+    }
+});
+
+
+app.get("/api/personas/last-messages", auth, async (req, res) => {
+    try {
+        const personas = await Persona.find({ userId: req.userId }).select("_id");
+        const personaIds = personas.map(p => p._id);
+        const lastMessages = await Message.aggregate([
+            { $match: { personaId: { $in: personaIds } } },
+            { $sort: { createdAt: -1 } },
+            {
+                $group: {
+                    _id: "$personaId",
+                    lastMessage: { $first: "$$ROOT" }
+                }
+            }
+        ]);
+
+        const result = lastMessages.reduce((acc, item) => {
+            acc[item._id] = item.lastMessage;
+            return acc;
+        }, {});
+
+        res.json(result);
+    } catch (err) {
+        console.error("❌ Lỗi khi lấy tin nhắn cuối cùng:", err);
+        res.status(500).json({ error: "Server error" });
     }
 });
 
