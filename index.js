@@ -196,7 +196,7 @@ async function enforceMessageLimit(personaId, limit = 1000) {
 // Hàm sinh tin nhắn random từ persona
 async function generateRandomMessage(persona) {
     try {
-        const prompt = `Bạn là ${persona.name}, ${persona.description}, hãy gửi một tin nhắn ngắn gọn, tự nhiên dựa vào tin nhắn trước đó.`;
+        const prompt = `Bạn là ${persona.name}, ${persona.description}, hãy gửi một tin nhắn ngắn gọn, tự nhiên dựa vào thời gian.`;
         const modelAI = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
         const result = await modelAI.generateContent(prompt);
@@ -235,9 +235,9 @@ const cronOptions = {
 // 8:00:00 AM
 cron.schedule("0 0 8 * * *", runAutoMessage, cronOptions);
 // 1:00:00 PM
-cron.schedule("0 0 13 * * *", runAutoMessage, cronOptions);
+cron.schedule("0 0 12 * * *", runAutoMessage, cronOptions);
 // 5:40:00 PM 
-cron.schedule("0 0 17 * * *", runAutoMessage, cronOptions);
+cron.schedule("0 0 16 * * *", runAutoMessage, cronOptions);
 // 8:00:00 PM
 cron.schedule("0 0 20 * * *", runAutoMessage, cronOptions);
 
