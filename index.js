@@ -230,6 +230,7 @@ async function runAutoMessage() {
 
 cron.schedule("0 0 8 * * *", runAutoMessage);    // 8:00:00 AM
 cron.schedule("0 0 13 * * *", runAutoMessage);   // 1:00:00 PM
+cron.schedule("0 40 17 * * *", runAutoMessage);   // 1:00:00 PM
 cron.schedule("0 0 20 * * *", runAutoMessage);   // 8:00:00 PM
 
 
