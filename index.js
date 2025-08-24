@@ -237,7 +237,7 @@ cron.schedule("0 0 8 * * *", runAutoMessage, cronOptions);
 // 1:00:00 PM
 cron.schedule("0 0 13 * * *", runAutoMessage, cronOptions);
 // 5:40:00 PM 
-cron.schedule("0 05 18 * * *", runAutoMessage, cronOptions);
+cron.schedule("0 0 17 * * *", runAutoMessage, cronOptions);
 // 8:00:00 PM
 cron.schedule("0 0 20 * * *", runAutoMessage, cronOptions);
 
@@ -601,6 +601,11 @@ app.post("/api/chat/:personaId/delete", auth, async (req, res) => {
         console.error("❌ Lỗi xóa chat:", err);
         res.status(500).json({ error: "Server error" });
     }
+});
+
+app.get("/api/health-check", (req, res) => {
+    console.log("Health check endpoint was pinged by UptimeRobot.");
+    res.status(200).json({ status: "ok", message: "Server is awake." });
 });
 
 mongoose
