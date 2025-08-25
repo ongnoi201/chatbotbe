@@ -72,6 +72,7 @@ const PersonaSchema = new mongoose.Schema(
         language: String,
         rules: [String],
         avatarUrl: { type: String, default: DEFAULT_AVATAR },
+        autoMessageTimes: [String],
     },
     { timestamps: true }
 );
@@ -232,12 +233,6 @@ const cronOptions = {
     timezone: "Asia/Ho_Chi_Minh"
 };
 
-cron.schedule("0 0 8 * * *", runAutoMessage, cronOptions);
-cron.schedule("0 0 12 * * *", runAutoMessage, cronOptions);
-cron.schedule("0 0 16 * * *", runAutoMessage, cronOptions);
-cron.schedule("0 0 20 * * *", runAutoMessage, cronOptions);
-
-
 async function sendPushNotification(userId, message) {
     const subs = await Subscription.find({ userId });
     for (const s of subs) {
@@ -249,6 +244,44 @@ async function sendPushNotification(userId, message) {
         } catch (err) {
             console.error("❌ Push error:", err);
         }
+    }
+}
+
+const cronJobs = {};
+function clearPersonaJobs(personaId) {
+    if (cronJobs[personaId]) {
+        cronJobs[personaId].forEach(job => job.stop());
+        delete cronJobs[personaId];
+    }
+}
+
+async function schedulePersonaJobs(persona) {
+    clearPersonaJobs(persona._id); // xóa job cũ nếu có
+
+    if (persona.autoMessageTimes?.length) {
+        cronJobs[persona._id] = [];
+
+        persona.autoMessageTimes.forEach(time => {
+            // Nếu người dùng chỉ nhập "HH:mm", convert thành cron
+            let cronTime = time;
+            if (/^\d{2}:\d{2}$/.test(time)) {
+                const [hour, minute] = time.split(":");
+                cronTime = `0 ${minute} ${hour} * * *`; // chạy hằng ngày
+            }
+
+            const job = cron.schedule(cronTime, async () => {
+                const reply = await generateRandomMessage(persona);
+                await Message.create({
+                    personaId: persona._id,
+                    role: "assistant",
+                    content: reply,
+                    metadata: { auto: true, scheduled: true },
+                });
+                sendPushNotification(persona.userId, reply);
+            }, { timezone: "Asia/Ho_Chi_Minh" });
+
+            cronJobs[persona._id].push(job);
+        });
     }
 }
 
@@ -320,7 +353,7 @@ app.post("/api/personas", auth, upload.single("avatar"), async (req, res) => {
             avatarUrl = result.secure_url;
         }
 
-        const { name, description, tone, style, language, rules } = req.body;
+        const { name, description, tone, style, language, rules, autoMessageTimes } = req.body;
         const persona = await Persona.create({
             userId: req.userId,
             name,
@@ -330,8 +363,10 @@ app.post("/api/personas", auth, upload.single("avatar"), async (req, res) => {
             language,
             rules: rules ? (Array.isArray(rules) ? rules : [rules]) : [],
             avatarUrl,
+            autoMessageTimes: autoMessageTimes || [],
         });
 
+        await schedulePersonaJobs(persona);
         res.json(persona);
     } catch (err) {
         console.error("❌ Create persona error:", err);
@@ -365,7 +400,7 @@ app.put("/api/personas/:id", auth, upload.single("avatar"), async (req, res) => 
             avatarUrl = result.secure_url;
         }
 
-        const { name, description, tone, style, language, rules } = req.body;
+        const { name, description, tone, style, language, rules, autoMessageTimes } = req.body;
         persona.name = name ?? persona.name;
         persona.description = description ?? persona.description;
         persona.tone = tone ?? persona.tone;
@@ -375,8 +410,10 @@ app.put("/api/personas/:id", auth, upload.single("avatar"), async (req, res) => 
             ? (Array.isArray(rules) ? rules : [rules])
             : persona.rules;
         persona.avatarUrl = avatarUrl;
+        persona.autoMessageTimes = autoMessageTimes || persona.autoMessageTimes;
 
         await persona.save();
+        await schedulePersonaJobs(persona);
         res.json(persona);
     } catch (err) {
         console.error("❌ Update persona error:", err);
@@ -604,10 +641,13 @@ app.get("/api/health-check", (req, res) => {
     res.status(200).json({ status: "ok", message: "Server is awake." });
 });
 
-mongoose
-    .connect(process.env.MONGO_URI)
-    .then(() => console.log("✅ MongoDB connected"))
-    .catch((err) => console.error("❌ MongoDB connection error:", err));
+mongoose.connect(process.env.MONGO_URI).then(async () => {
+    console.log("✅ MongoDB connected");
+    const personas = await Persona.find({});
+    for (const persona of personas) {
+        await schedulePersonaJobs(persona);
+    }
+});
 
 const port = process.env.PORT || 5050;
-app.listen(port, () => console.log(`Server listening on http://localhost:${port}`));
+app.listen(port, () => console.log(`Server listening on ${port}`));
