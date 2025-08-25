@@ -209,37 +209,13 @@ async function generateRandomMessage(persona) {
     }
 }
 
-async function runAutoMessage() {
-    console.log("🕒 Tới giờ gửi tin nhắn tự động...");
-    try {
-        const personas = await Persona.find({});
-        for (const persona of personas) {
-            const reply = await generateRandomMessage(persona);
-            const assistantMsg = await Message.create({
-                personaId: persona._id,
-                role: "assistant",
-                content: reply,
-                metadata: { auto: true, scheduled: true },
-            });
-            // Gửi push notification
-            sendPushNotification(persona.userId, reply);
-        }
-    } catch (err) {
-        console.error("❌ Lỗi khi gửi tin nhắn tự động:", err);
-    }
-}
-
-const cronOptions = {
-    timezone: "Asia/Ho_Chi_Minh"
-};
-
 async function sendPushNotification(userId, message) {
     const subs = await Subscription.find({ userId });
     for (const s of subs) {
         try {
             await webpush.sendNotification(
                 s.subscription,
-                JSON.stringify({ title: "Tin nhắn mới từ chatbot", body: message })
+                JSON.stringify({ title: "Tin nhắn mới", body: message })
             );
         } catch (err) {
             console.error("❌ Push error:", err);
@@ -263,6 +239,7 @@ async function schedulePersonaJobs(persona) {
 
         persona.autoMessageTimes.forEach(time => {
             // Nếu người dùng chỉ nhập "HH:mm", convert thành cron
+            console.log("🕒 Tới giờ gửi tin nhắn tự động...");
             let cronTime = time;
             if (/^\d{2}:\d{2}$/.test(time)) {
                 const [hour, minute] = time.split(":");
