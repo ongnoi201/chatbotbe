@@ -239,7 +239,6 @@ async function schedulePersonaJobs(persona) {
 
         persona.autoMessageTimes.forEach(time => {
             // Nếu người dùng chỉ nhập "HH:mm", convert thành cron
-            console.log("🕒 Tới giờ gửi tin nhắn tự động...");
             let cronTime = time;
             if (/^\d{2}:\d{2}$/.test(time)) {
                 const [hour, minute] = time.split(":");
