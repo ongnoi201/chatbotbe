@@ -289,7 +289,11 @@ app.post("/api/users/login", async (req, res) => {
         const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
             expiresIn: "7d",
         });
-        res.json({ token, user });
+
+        const userObj = user.toObject();
+        delete userObj.passwordHash;
+
+        res.json({ token, user: userObj });
     } catch (err) {
         res.status(500).json({ error: err.message });
     }
