@@ -209,13 +209,13 @@ async function generateRandomMessage(persona) {
     }
 }
 
-async function sendPushNotification(userId, message) {
+async function sendPushNotification(userId, personaName, message) {
     const subs = await Subscription.find({ userId });
     for (const s of subs) {
         try {
             await webpush.sendNotification(
                 s.subscription,
-                JSON.stringify({ title: "Tin nhắn mới", body: message })
+                JSON.stringify({ title: personaName, body: message })
             );
         } catch (err) {
             console.error("❌ Push error:", err);
@@ -253,7 +253,7 @@ async function schedulePersonaJobs(persona) {
                     content: reply,
                     metadata: { auto: true, scheduled: true },
                 });
-                sendPushNotification(persona.userId, reply);
+                sendPushNotification(persona.userId, persona.name, reply);
             }, { timezone: "Asia/Ho_Chi_Minh" });
 
             cronJobs[persona._id].push(job);
