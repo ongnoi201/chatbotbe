@@ -197,7 +197,7 @@ async function enforceMessageLimit(personaId, limit = 1000) {
 // Hàm sinh tin nhắn random từ persona
 async function generateRandomMessage(persona) {
     try {
-        const prompt = `Bạn là ${persona.name}, ${persona.description}, hãy gửi một tin nhắn ngắn gọn, tự nhiên, dựa vào thời gian hiện tại.`;
+        const prompt = `Bạn là ${persona.name}, ${persona.description}, lấy thời gian hiện tại trên hệ thống để gửi một tin nhắn ngắn gọn, tự nhiên, đúng thời điểm.`;
         const modelAI = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
         const result = await modelAI.generateContent(prompt);
