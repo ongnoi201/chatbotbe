@@ -195,17 +195,19 @@ async function enforceMessageLimit(personaId, limit = 1000) {
 }
 
 // Hàm sinh tin nhắn random từ persona
-async function generateRandomMessage(persona) {
+async function generateRandomMessage(persona, time) {
     try {
-        const prompt = `Bạn là ${persona.name}, ${persona.description}, lấy thời gian hiện tại trên hệ thống để gửi một tin nhắn ngắn gọn, tự nhiên, đúng thời điểm.`;
-        const modelAI = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        const prompt = `Bạn là ${persona.name}, ${persona.description}. 
+        Hiện tại là thời điểm ${time}. 
+        Hãy gửi một tin nhắn ngắn gọn, tự nhiên, đúng với bối cảnh của thời điểm này.`;
 
+        const modelAI = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
         const result = await modelAI.generateContent(prompt);
         const text = result.response.text().trim();
-
         return text.length > 0 ? text : "Xin chào 👋";
     } catch (err) {
         console.error("Lỗi AI:", err);
+        return "Xin chào 👋";
     }
 }
 
@@ -246,12 +248,12 @@ async function schedulePersonaJobs(persona) {
             }
 
             const job = cron.schedule(cronTime, async () => {
-                const reply = await generateRandomMessage(persona);
+                const reply = await generateRandomMessage(persona, time);
                 await Message.create({
                     personaId: persona._id,
                     role: "assistant",
                     content: reply,
-                    metadata: { auto: true, scheduled: true },
+                    metadata: { auto: true, scheduled: true, time },
                 });
                 sendPushNotification(persona.userId, persona.name, reply);
             }, { timezone: "Asia/Ho_Chi_Minh" });
