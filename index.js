@@ -197,12 +197,34 @@ async function enforceMessageLimit(personaId, limit = 1000) {
 // Hàm sinh tin nhắn random từ persona
 async function generateRandomMessage(persona, time) {
     try {
-        const prompt = `Bạn là ${persona.name}, ${persona.description}. 
-        Hiện tại là thời điểm ${time}. 
-        Hãy gửi một tin nhắn ngắn gọn, tự nhiên, đúng với bối cảnh của thời điểm này.`;
+        // Lấy 2 tin nhắn gần nhất
+        const lastMessages = await Message.find({ personaId: persona._id })
+            .sort({ createdAt: -1 })
+            .limit(2);
 
-        const modelAI = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-        const result = await modelAI.generateContent(prompt);
+        // Đảo ngược thứ tự (cũ → mới)
+        const ordered = lastMessages.reverse();
+        const modelAI = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const result = await modelAI.generateContent({
+            contents: [
+                // thêm ngữ cảnh hệ thống
+                {
+                    role: "user",
+                    parts: [{
+                        text: `
+                            Bạn là ${persona.name}, ${persona.description}.
+                            Hiện tại là thời điểm ${time}.
+                            Hãy gửi một tin nhắn ngắn gọn, tự nhiên, đúng ngữ cảnh thời gian và tiếp nối mạch hội thoại thay vì mở đầu lại.`
+                    }]
+                },
+                // nối 2 tin nhắn cuối vào
+                ...toHistory(ordered),
+            ],
+            systemInstruction: personaToSystem(persona),
+            generationConfig: { temperature: 0.7, maxOutputTokens: 256 },
+            safetySettings: defaultSafety,
+        });
+
         const text = result.response.text().trim();
         return text.length > 0 ? text : "Xin chào 👋";
     } catch (err) {
