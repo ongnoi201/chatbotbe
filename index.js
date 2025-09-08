@@ -58,6 +58,8 @@ const UserSchema = new mongoose.Schema(
         email: { type: String, required: true, unique: true },
         name: String,
         passwordHash: String,
+        cover: String,
+        avatar: String,
     },
     { timestamps: true }
 );
@@ -197,34 +199,26 @@ async function enforceMessageLimit(personaId, limit = 1000) {
 // Hàm sinh tin nhắn random từ persona
 async function generateRandomMessage(persona, time) {
     try {
-        // Lấy 2 tin nhắn gần nhất
         const lastMessages = await Message.find({ personaId: persona._id })
             .sort({ createdAt: -1 })
             .limit(2);
 
-        // Đảo ngược thứ tự (cũ → mới)
-        const ordered = lastMessages.reverse();
-        const modelAI = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-        const result = await modelAI.generateContent({
-            contents: [
-                // thêm ngữ cảnh hệ thống
-                {
-                    role: "user",
-                    parts: [{
-                        text: `
-                            Bạn là ${persona.name}, ${persona.description}.
-                            Hiện tại là thời điểm ${time}.
-                            Hãy gửi một tin nhắn ngắn gọn, tự nhiên, đúng ngữ cảnh thời gian và tiếp nối mạch hội thoại thay vì mở đầu lại.`
-                    }]
-                },
-                // nối 2 tin nhắn cuối vào
-                ...toHistory(ordered),
-            ],
-            systemInstruction: personaToSystem(persona),
-            generationConfig: { temperature: 0.7, maxOutputTokens: 256 },
-            safetySettings: defaultSafety,
-        });
+        let context = "Chưa có cuộc trò chuyện trước đó.";
+        if (lastMessages.length > 0) {
+            const ordered = lastMessages.reverse();
+            context = ordered.map(m => `${m.role === "user" ? "Người dùng" : persona.name}: "${m.content}"`).join("\n");
+        }
 
+        const prompt = `
+            Bạn là ${persona.name}, ${persona.description}.
+            Hiện tại là thời điểm ${time}.
+            Dưới đây là những tin nhắn gần nhất:
+            ${context}
+            Hãy gửi một tin nhắn ngắn gọn, tự nhiên, mang cảm giác tiếp nối hội thoại thay vì mở đầu lại.
+            `;
+
+        const modelAI = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+        const result = await modelAI.generateContent(prompt);
         const text = result.response.text().trim();
         return text.length > 0 ? text : "Xin chào 👋";
     } catch (err) {
@@ -232,6 +226,7 @@ async function generateRandomMessage(persona, time) {
         return "Xin chào 👋";
     }
 }
+
 
 async function sendPushNotification(userId, personaName, message) {
     const subs = await Subscription.find({ userId });
@@ -284,6 +279,160 @@ async function schedulePersonaJobs(persona) {
         });
     }
 }
+
+// ==================== PROFILE ROUTES ====================
+
+// Lấy thống kê của user
+app.get("/api/profile/stats", auth, async (req, res) => {
+    try {
+        const personaCount = await Persona.countDocuments({ userId: req.userId });
+        const messageCount = await Message.countDocuments({
+            personaId: { $in: await Persona.find({ userId: req.userId }).distinct("_id") },
+        });
+
+        // Lấy thống kê tin nhắn theo persona
+        const personaMessages = await Message.aggregate([
+            { $match: { personaId: { $in: await Persona.find({ userId: req.userId }).distinct("_id") } } },
+            { $group: { _id: "$personaId", count: { $sum: 1 } } },
+            {
+                $lookup: {
+                    from: "personas",
+                    localField: "_id",
+                    foreignField: "_id",
+                    as: "persona",
+                },
+            },
+            { $unwind: "$persona" },
+            { $project: { personaId: "$_id", name: "$persona.name", count: 1 } },
+        ]);
+
+        res.json({ personaCount, messageCount, personaMessages });
+    } catch (err) {
+        console.error("❌ Lỗi lấy stats:", err);
+        res.status(500).json({ error: "Server error" });
+    }
+});
+
+// Cập nhật user (tên, email, avatar, cover)
+app.put("/api/profile/update", auth, upload.fields([{ name: "avatar" }, { name: "cover" }]), async (req, res) => {
+    try {
+        const user = await User.findById(req.userId);
+        if (!user) return res.status(404).json({ error: "User not found" });
+
+        // Upload avatar
+        if (req.files?.avatar?.[0]) {
+            if (user.avatar) {
+                const publicId = getCloudinaryPublicId(user.avatar);
+                if (publicId) await deleteFromCloudinary(publicId);
+            }
+            const result = await uploadToCloudinary(req.files.avatar[0].buffer, `avatar_${Date.now()}`);
+            user.avatar = result.secure_url;
+        }
+
+        // Upload cover
+        if (req.files?.cover?.[0]) {
+            if (user.cover) {
+                const publicId = getCloudinaryPublicId(user.cover);
+                if (publicId) await deleteFromCloudinary(publicId);
+            }
+            const result = await uploadToCloudinary(req.files.cover[0].buffer, `cover_${Date.now()}`);
+            user.cover = result.secure_url;
+        }
+
+        // Cập nhật name + email
+        const { name, email } = req.body;
+        if (name) user.name = name;
+        if (email) user.email = email;
+
+        await user.save();
+
+        const userObj = user.toObject();
+        delete userObj.passwordHash;
+
+        res.json(userObj);
+    } catch (err) {
+        console.error("❌ Lỗi update profile:", err);
+        res.status(500).json({ error: "Server error" });
+    }
+});
+
+// Change password
+app.post("/api/profile/change-password", auth, async (req, res) => {
+    try {
+        const { oldPassword, newPassword } = req.body;
+        if (!oldPassword || !newPassword) {
+            return res.status(400).json({ error: "Thiếu mật khẩu cũ hoặc mới" });
+        }
+
+        const user = await User.findById(req.userId);
+        if (!user) return res.status(404).json({ error: "User not found" });
+
+        const valid = await bcrypt.compare(oldPassword, user.passwordHash);
+        if (!valid) return res.status(400).json({ error: "Mật khẩu cũ không đúng" });
+
+        user.passwordHash = await bcrypt.hash(newPassword, 10);
+        await user.save();
+
+        res.json({ success: true, message: "Đổi mật khẩu thành công" });
+    } catch (err) {
+        console.error("❌ Change password error:", err);
+        res.status(500).json({ error: "Server error" });
+    }
+});
+
+
+// Xóa user + toàn bộ dữ liệu liên quan
+app.delete("/api/profile/delete", auth, async (req, res) => {
+    try {
+        const user = await User.findById(req.userId);
+        if (!user) return res.status(404).json({ error: "User not found" });
+
+        // Xóa avatar + cover khỏi Cloudinary
+        if (user.avatar) {
+            const publicId = getCloudinaryPublicId(user.avatar);
+            if (publicId) await deleteFromCloudinary(publicId);
+        }
+        if (user.cover) {
+            const publicId = getCloudinaryPublicId(user.cover);
+            if (publicId) await deleteFromCloudinary(publicId);
+        }
+
+        // Xóa persona + message
+        const personas = await Persona.find({ userId: req.userId });
+        for (const p of personas) {
+            if (p.avatarUrl && p.avatarUrl !== DEFAULT_AVATAR) {
+                const publicId = getCloudinaryPublicId(p.avatarUrl);
+                if (publicId) await deleteFromCloudinary(publicId);
+            }
+            await Message.deleteMany({ personaId: p._id });
+        }
+        await Persona.deleteMany({ userId: req.userId });
+
+        // Xóa subscription
+        await Subscription.deleteMany({ userId: req.userId });
+
+        // Xóa user
+        await User.deleteOne({ _id: req.userId });
+
+        res.json({ success: true, message: "User và toàn bộ dữ liệu liên quan đã bị xóa" });
+    } catch (err) {
+        console.error("❌ Lỗi delete profile:", err);
+        res.status(500).json({ error: "Server error" });
+    }
+});
+
+// Lấy thông tin user hiện tại
+app.get("/api/profile/me", auth, async (req, res) => {
+    try {
+        const user = await User.findById(req.userId).select("-passwordHash");
+        if (!user) return res.status(404).json({ error: "User not found" });
+
+        res.json(user);
+    } catch (err) {
+        console.error("❌ Lỗi get profile:", err);
+        res.status(500).json({ error: "Server error" });
+    }
+});
 
 
 // Auth routes
@@ -617,21 +766,23 @@ app.delete("/api/chat/:personaId/history", auth, async (req, res) => {
     }
 });
 
-
 app.post("/api/chat/:personaId/delete", auth, async (req, res) => {
     try {
         const { personaId } = req.params;
-        const { index } = req.body;
+        const { messageId } = req.body; 
+        if (!messageId) {
+            return res.status(400).json({ error: "messageId is required" });
+        }
         const persona = await Persona.findOne({ _id: personaId, userId: req.userId });
         if (!persona) return res.status(404).json({ error: "Persona not found" });
-
-        const messages = await Message.find({ personaId }).sort({ createdAt: 1 });
-        if (index < 0 || index >= messages.length) {
-            return res.status(400).json({ error: "Invalid index" });
+        const startingMessage = await Message.findById(messageId);
+        if (!startingMessage) {
+            return res.status(404).json({ error: "Message to delete from not found" });
         }
-        const toDelete = messages.slice(index);
-        const ids = toDelete.map((m) => m._id);
-        await Message.deleteMany({ _id: { $in: ids } });
+        await Message.deleteMany({
+            personaId: personaId,
+            createdAt: { $gte: startingMessage.createdAt }
+        });
         const remaining = await Message.find({ personaId }).sort({ createdAt: 1 });
         res.json(remaining);
     } catch (err) {
