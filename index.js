@@ -12,6 +12,7 @@ import authRoutes from "./routes/authRoutes.js";
 import profileRoutes from "./routes/profileRoutes.js";
 import personaRoutes from "./routes/personaRoutes.js";
 import chatRoutes from "./routes/chatRoutes.js";
+import notifyRoutes from "./routes/notifyRoutes.js";
 import subscriptionRoutes from "./routes/subscriptionRoutes.js";
 
 import Persona from "./models/Persona.js";
@@ -30,6 +31,7 @@ app.use("/api/users", authRoutes);
 app.use("/api/profile", profileRoutes);
 app.use("/api/personas", personaRoutes);
 app.use("/api/chat", chatRoutes);
+app.use("/api/notify", notifyRoutes);
 app.use("/api", subscriptionRoutes);
 
 app.get("/api/health-check", (req, res) => {

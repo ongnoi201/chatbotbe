@@ -8,7 +8,7 @@ const upload = multer({
         const ok = ["image/jpg", "image/jpeg", "image/png", "image/webp", "image/gif"].includes(
             file.mimetype
         );
-        cb(ok ? null : new Error("Unsupported file type"), ok);
+        cb(ok ? null : new Error("File ảnh không được hỗ trợ"), ok);
     },
 });
 
