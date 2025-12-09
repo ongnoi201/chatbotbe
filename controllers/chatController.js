@@ -7,7 +7,7 @@ import { enforceMessageLimit } from "../utils/messageHelper.js";
 
 const BodySchema = z.object({
     messages: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string() })).default([]),
-    model: z.string().default("gemini-2.5-flash"),
+    model: z.string().default("gemini-2.0-flash"),
     temperature: z.number().min(0).max(2).default(0.7),
     maxOutputTokens: z.number().min(1).max(8192).default(1024),
     safetySettings: z.array(z.any()).optional(),

@@ -34,7 +34,7 @@ export async function generateRandomMessage(persona, time) {
             Hãy gửi một tin nhắn ngắn gọn, tự nhiên, mang cảm giác tiếp nối hội thoại thay vì mở đầu lại.
             `;
 
-        const modelAI = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const modelAI = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
         const result = await modelAI.generateContent(prompt);
         generatedText = result.response.text().trim();
 
