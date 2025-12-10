@@ -54,7 +54,7 @@ export const deleteNotifyByStatus = async (req, res) => {
     try {
         const result = await Notify.deleteMany({ 
             userId: currentUserId,
-            status: statusToDelete 
+            category: statusToDelete 
         });
 
         if (result.deletedCount === 0) {
@@ -69,7 +69,7 @@ export const deleteNotifyByStatus = async (req, res) => {
             success: true,
             message: `Đã xóa thành công ${result.deletedCount} thông báo của bạn có trạng thái '${statusToDelete}'.`,
             deletedCount: result.deletedCount,
-            status: statusToDelete,
+            category: statusToDelete,
         });
 
     } catch (error) {
@@ -105,6 +105,58 @@ export const countNotifications = async (req, res) => {
         return res.status(500).json({ 
             success: false, 
             message: "Lỗi Server nội bộ khi đếm thông báo." 
+        });
+    }
+};
+
+export const addNotify = async (req, res) => {
+    const currentUserId = req.userId;
+    const { category, name, message, personaId, time } = req.body; 
+
+    if (!currentUserId) {
+        return res.status(401).json({
+            success: false,
+            message: "Truy cập bị từ chối. Không tìm thấy ID người dùng.",
+        });
+    }
+
+    if (!category || !name || !message) {
+        return res.status(400).json({
+            success: false,
+            message: "Thiếu các trường bắt buộc: 'category', 'name', hoặc 'message'.",
+        });
+    }
+    
+    if (!["SUCCESS", "FAILURE"].includes(category)) {
+        return res.status(400).json({
+            success: false,
+            message: "Trường 'category' phải là 'SUCCESS' hoặc 'FAILURE'.",
+        });
+    }
+    
+    const newNotify = {
+        category,
+        name,
+        message,
+        userId: currentUserId,
+        time: time ? new Date(time) : Date.now(), 
+        ...(personaId && mongoose.Types.ObjectId.isValid(personaId) && { personaId }),
+    };
+
+    try {
+        const notify = await Notify.create(newNotify);
+        await notify.populate('personaId', 'name');
+        return res.status(201).json({
+            success: true,
+            message: "Thông báo đã được tạo thành công.",
+            data: notify,
+        });
+
+    } catch (error) {
+        console.error("Lỗi khi thêm thông báo:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Lỗi Server nội bộ khi thêm thông báo.",
         });
     }
 };

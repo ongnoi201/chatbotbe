@@ -5,6 +5,7 @@ import Message from "../models/Message.js";
 import Subscription from "../models/Subscription.js";
 import { getCloudinaryPublicId, uploadToCloudinary, deleteFromCloudinary } from "../utils/cloudinaryHelper.js";
 import { clearPersonaJobs } from "../utils/scheduler.js";
+import Notify from "../models/Notify.js";
 
 export const getProfile = async (req, res) => {
     try {
@@ -46,6 +47,19 @@ export const updateProfile = async (req, res) => {
         if (email) user.email = email;
 
         await user.save();
+        
+        // GHI LẠI THÔNG BÁO KHI CẬP NHẬT THÀNH CÔNG
+        try {
+            await Notify.create({
+                category: "SUCCESS",
+                name: "Cập nhật Hồ sơ",
+                message: "Thông tin hồ sơ đã được cập nhật thành công.",
+                userId: req.userId,
+            });
+        } catch (notifyErr) {
+            console.error("❌ Lỗi ghi Notify (updateProfile):", notifyErr);
+        }
+        
         const userObj = user.toObject();
         delete userObj.passwordHash;
         res.json(userObj);
@@ -70,6 +84,18 @@ export const changePassword = async (req, res) => {
 
         user.passwordHash = await bcrypt.hash(newPassword, 10);
         await user.save();
+
+        // GHI LẠI THÔNG BÁO KHI ĐỔI MẬT KHẨU THÀNH CÔNG
+        try {
+            await Notify.create({
+                category: "SUCCESS",
+                name: "Đổi mật khẩu",
+                message: "Mật khẩu đã được thay đổi thành công.",
+                userId: req.userId,
+            });
+        } catch (notifyErr) {
+            console.error("❌ Lỗi ghi Notify (changePassword):", notifyErr);
+        }
 
         res.json({ success: true, message: "Đổi mật khẩu thành công" });
     } catch (err) {

@@ -15,7 +15,7 @@ export async function generateRandomMessage(persona, time) {
         // 1. Lấy tin nhắn gần nhất để tạo context
         const lastMessages = await Message.find({ personaId: persona._id })
             .sort({ createdAt: -1 })
-            .limit(2);
+            .limit(1);
 
         let context = "Chưa có cuộc trò chuyện trước đó.";
         if (lastMessages.length > 0) {

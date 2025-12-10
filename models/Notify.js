@@ -21,7 +21,8 @@ const notifySchema = new mongoose.Schema({
     personaId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: "Persona",
-        required: true,
+        required: false,
+        default: null
     },
     userId: { // Thêm trường này
         type: mongoose.Schema.Types.ObjectId,
